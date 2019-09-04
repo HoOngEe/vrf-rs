@@ -25,6 +25,7 @@
 //! * Verify VRF proof
 use std::fmt;
 use std::{
+    cmp::Ordering,
     fmt::{Debug, Formatter},
     os::raw::c_ulong,
 };
@@ -52,6 +53,7 @@ mod utils;
 pub enum CipherSuite {
     /// `NIST P-256` with `SHA256` and `ECVRF_hash_to_curve_try_and_increment`
     P256_SHA256_TAI,
+    SECP256K1_SHA256_SVDW,
     /// `Secp256k1` with `SHA256` and `ECVRF_hash_to_curve_try_and_increment`
     SECP256K1_SHA256_TAI,
     /// `NIST K-163` with `SHA256` and `ECVRF_hash_to_curve_try_and_increment`
@@ -62,6 +64,7 @@ impl CipherSuite {
     fn suite_string(&self) -> u8 {
         match *self {
             CipherSuite::P256_SHA256_TAI => 0x01,
+            CipherSuite::SECP256K1_SHA256_SVDW => 0xFD,
             CipherSuite::SECP256K1_SHA256_TAI => 0xFE,
             CipherSuite::K163_SHA256_TAI => 0xFF,
         }
@@ -112,6 +115,7 @@ pub struct ECVRF {
     hasher: MessageDigest,
     // The order of the curve
     order: BigNum,
+    p: BigNum,
     // Length of the order of the curve in bits
     qlen: usize,
     // 2n = length of a field element in bits rounded up to the nearest even integer
@@ -150,6 +154,7 @@ impl ECVRF {
                 (EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?, 0x01)
             }
             CipherSuite::K163_SHA256_TAI => (EcGroup::from_curve_name(Nid::SECT163K1)?, 0x02),
+            CipherSuite::SECP256K1_SHA256_SVDW => (EcGroup::from_curve_name(Nid::SECP256K1)?, 0x01),
             CipherSuite::SECP256K1_SHA256_TAI => (EcGroup::from_curve_name(Nid::SECP256K1)?, 0x01),
         };
 
@@ -171,6 +176,7 @@ impl ECVRF {
             group,
             bn_ctx,
             order,
+            p,
             hasher,
             n,
             qlen,
@@ -322,6 +328,180 @@ impl ECVRF {
         }
         // Return error if no valid point was found
         point.ok_or(Error::HashToPointError)
+    }
+
+    /// Function to convert a `Hash(PK|DATA)` to a point in the curve, in constant time.
+    /// Stated in [hash-to-curve-04](https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-04#section-6.9.1)
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `public_key` - An `EcPoint` referencing the public key.
+    /// * `alpha` - A slice containing the input data.
+    ///
+    /// # Returns
+    ///
+    /// * If successful, an `EcPoint` representing the hashed point.
+    fn hash_to_point_svdw(&mut self, public_key: &EcPoint, alpha: &[u8]) -> Result<EcPoint, Error> {
+        let pk_bytes = public_key.to_bytes(
+            &self.group,
+            PointConversionForm::COMPRESSED,
+            &mut self.bn_ctx,
+        )?;
+        let cipher = [self.cipher_suite.suite_string(), 0x01];
+        let v = [&cipher[..], &pk_bytes[..], &alpha[..]].concat();
+        let hash = hash(self.hasher, &v).unwrap();
+        let u = BigNum::from_slice(&hash)?;
+
+        // Constants
+        let one = BigNum::from_u32(1)?;
+        // Z, which is defined as 1 in SECP256K1-SHA256-SVDW-RO/NU
+        let c_z = BigNum::from_u32(1)?;
+        // B, from y^2 = x^3 + Ax + B
+        // secp256k1 is y^2 = x^3 + 7
+        let c_b = BigNum::from_u32(7)?;
+        // p - 2. Used in inv0(), Pre-computed value
+        let pm2 = BigNum::from_hex_str(
+            "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2d",
+        )?;
+        // (p - 1) / 2. Used in is_square(), Pre-computed value
+        let pm1d2 = BigNum::from_hex_str(
+            "7fffffffffffffffffffffffffffffffffffffffffffffffffffffff7ffffe17",
+        )?;
+        // (p + 1) / 4. Used in sqrt(), Pre-computed value
+        let pp1d4 = BigNum::from_hex_str(
+            "3fffffffffffffffffffffffffffffffffffffffffffffffffffffffbfffff0c",
+        )?;
+        // c1 = g(Z)
+        let c1 = BigNum::from_u32(8)?;
+        // c2 = sqrt(-3 * Z^2)
+        let c2 = BigNum::from_hex_str(
+            "a2d2ba93507f1df233770c2a797962cc61f6d15da14ecd47d8d27ae1cd5f852",
+        )?;
+        // c3 = (sqrt(-3 * Z^2) - Z) / 2
+        let c3 = BigNum::from_hex_str(
+            "851695d49a83f8ef919bb86153cbcb16630fb68aed0a766a3ec693d68e6afa40",
+        )?;
+        // c4 = (sqrt(-3 * Z^2) + Z) / 2
+        let c4 = BigNum::from_hex_str(
+            "851695d49a83f8ef919bb86153cbcb16630fb68aed0a766a3ec693d68e6afa41",
+        )?;
+        // c5 = 1 / (3 * Z^2)
+        let c5 = BigNum::from_hex_str(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa9fffffd75",
+        )?;
+
+        //  1.   t1 = u^2
+        let mut t1 = BigNum::new()?;
+        t1.mod_sqr(&u, &self.p, &mut self.bn_ctx)?;
+        //  2.   t2 = t1 + c1           // t2 = u^2 + g(Z)
+        let mut t2 = BigNum::new()?;
+        t2.mod_add(&t1, &c1, &self.p, &mut self.bn_ctx)?;
+        //  3.   t3 = t1 * t2
+        let mut t3 = BigNum::new()?;
+        t3.mod_mul(&t1, &t2, &self.p, &mut self.bn_ctx)?;
+        //  4.   t4 = inv0(t3)          // t4 = 1 / (u^2 * (u^2 + g(Z)))
+        let mut t4 = BigNum::new()?;
+        t4.mod_exp(&t3, &pm2, &self.p, &mut self.bn_ctx)?;
+        //  5.   t3 = t1^2
+        t3.mod_sqr(&t1, &self.p, &mut self.bn_ctx)?;
+        //  6.   t3 = t3 * t4
+        let mut t3_2 = BigNum::new()?;
+        t3_2.mod_mul(&t3, &t4, &self.p, &mut self.bn_ctx)?;
+        //  7.   t3 = t3 * c2           // t3 = u^2 * sqrt(-3 * Z^2) / (u^2 + g(Z))
+        t3.mod_mul(&t3_2, &c2, &self.p, &mut self.bn_ctx)?;
+        //  8.   x1 = c3 - t3
+        let mut x1 = BigNum::new()?;
+        x1.mod_sub(&c3, &t3, &self.p, &mut self.bn_ctx)?;
+        //  9.  gx1 = x1^2
+        let mut gx1 = BigNum::new()?;
+        gx1.mod_sqr(&x1, &self.p, &mut self.bn_ctx)?;
+        //  10. gx1 = gx1 * x1
+        let mut gx1_2 = BigNum::new()?;
+        gx1_2.mod_mul(&gx1, &x1, &self.p, &mut self.bn_ctx)?;
+        //  11. gx1 = gx1 + B           // gx1 = x1^3 + B
+        gx1.mod_add(&gx1_2, &c_b, &self.p, &mut self.bn_ctx)?;
+        //  12.  e1 = is_square(gx1)
+        let mut e1_v = BigNum::new()?;
+        e1_v.mod_exp(&gx1, &pm1d2, &self.p, &mut self.bn_ctx)?; // 0 or 1 then True
+        let e1 = e1_v.ucmp(&one) != Ordering::Greater;
+        //  13.  x2 = t3 - c4
+        let mut x2 = BigNum::new()?;
+        x2.mod_sub(&t3, &c4, &self.p, &mut self.bn_ctx)?;
+        //  14. gx2 = x2^2
+        let mut gx2 = BigNum::new()?;
+        gx2.mod_sqr(&x2, &self.p, &mut self.bn_ctx)?;
+        //  15. gx2 = gx2 * x2
+        let mut gx2_2 = BigNum::new()?;
+        gx2_2.mod_mul(&gx2, &x2, &self.p, &mut self.bn_ctx)?;
+        //  16. gx2 = gx2 + B           // gx2 = x2^3 + B
+        gx2.mod_add(&gx2_2, &c_b, &self.p, &mut self.bn_ctx)?;
+        //  17.  e2 = is_square(gx2)
+        let mut e2_v = BigNum::new()?;
+        e2_v.mod_exp(&gx2, &pm1d2, &self.p, &mut self.bn_ctx)?; // 0 or 1 then True
+        let e2 = e2_v.ucmp(&one) != Ordering::Greater;
+        //  18.  e3 = e1 OR e2          // logical OR
+        let e3 = e1 || e2;
+        //  19.  x3 = t2^2
+        let mut x3 = BigNum::new()?;
+        x3.mod_sqr(&t2, &self.p, &mut self.bn_ctx)?;
+        //  20.  x3 = x3 * t2
+        let mut x3_2 = BigNum::new()?;
+        x3_2.mod_mul(&x3, &t2, &self.p, &mut self.bn_ctx)?;
+        //  21.  x3 = x3 * t4
+        x3.mod_mul(&x3_2, &t4, &self.p, &mut self.bn_ctx)?;
+        //  22.  x3 = x3 * c5
+        x3_2.mod_mul(&x3, &c5, &self.p, &mut self.bn_ctx)?;
+        //  23.  x3 = Z - x3            // Z - (u^2 + g(Z))^2 / (3 Z^2 u^2)
+        x3.mod_sub(&c_z, &x3_2, &self.p, &mut self.bn_ctx)?;
+        //  24. gx3 = x3^2
+        let mut gx3 = BigNum::new()?;
+        gx3.mod_sqr(&x3, &self.p, &mut self.bn_ctx)?;
+        //  25. gx3 = gx3 * x3
+        let mut gx3_2 = BigNum::new()?;
+        gx3_2.mod_mul(&gx3, &x3, &self.p, &mut self.bn_ctx)?;
+        //  26. gx3 = gx3 + B           // gx3 = x3^3 + B
+        gx3.mod_add(&gx3_2, &c_b, &self.p, &mut self.bn_ctx)?;
+        //  27.   x = CMOV(x2, x1, e1)  // select x1 if gx1 is square
+        let mut x = match e1 {
+            true => x1,
+            false => x2,
+        };
+        //  28.  gx = CMOV(gx2, gx1, e1)
+        let mut gx = match e1 {
+            true => gx1,
+            false => gx2,
+        };
+        //  29.   x = CMOV(x3, x, e3)   // select x3 if gx1 and gx2 are not square
+        x = match e3 {
+            true => x,
+            false => x3,
+        };
+        //  30.  gx = CMOV(gx3, gx, e3)
+        gx = match e3 {
+            true => gx,
+            false => gx3,
+        };
+        //  31.   y = sqrt(gx)
+        let mut y = BigNum::new()?;
+        y.mod_exp(&gx, &pp1d4, &self.p, &mut self.bn_ctx)?;
+        //  32.  e4 = sgn0(u) == sgn0(y)
+        let e4 = (u.ucmp(&pm1d2) == Ordering::Greater) == (y.ucmp(&pm1d2) == Ordering::Greater);
+        //  33.   y = CMOV(-y, y, e4)   // select correct sign of y
+        let mut my = BigNum::new()?;
+        my.checked_sub(&self.p, &y)?;
+        y = match e4 {
+            true => y,
+            false => my,
+        };
+        //  34. return (x, y)
+        // Using uncompressed form
+        let mut v = vec![0x04];
+        v.extend(x.to_vec());
+        v.extend(y.to_vec());
+        assert_eq!(v.len(), 65);
+        let point = EcPoint::from_bytes(&self.group, &v, &mut self.bn_ctx)?;
+        Ok(point)
     }
 
     /// Function to convert an arbitrary string to a point in the curve as specified in VRF-draft-05
@@ -487,7 +667,12 @@ impl VRF<&[u8], &[u8]> for ECVRF {
         let public_key_point = self.derive_public_key_point(&secret_key)?;
 
         // Step 2: Hash to curve
-        let h_point = self.hash_to_try_and_increment(&public_key_point, alpha)?;
+        let h_point = match self.cipher_suite {
+            CipherSuite::SECP256K1_SHA256_SVDW => {
+                self.hash_to_point_svdw(&public_key_point, alpha)?
+            }
+            _ => self.hash_to_try_and_increment(&public_key_point, alpha)?,
+        };
 
         // Step 3: point to string
         let h_string = h_point.to_bytes(
@@ -545,7 +730,12 @@ impl VRF<&[u8], &[u8]> for ECVRF {
 
         // Step 2: hash to curve
         let public_key_point = EcPoint::from_bytes(&self.group, &y, &mut self.bn_ctx)?;
-        let h_point = self.hash_to_try_and_increment(&public_key_point, alpha)?;
+        let h_point = match self.cipher_suite {
+            CipherSuite::SECP256K1_SHA256_SVDW => {
+                self.hash_to_point_svdw(&public_key_point, alpha)?
+            }
+            _ => self.hash_to_try_and_increment(&public_key_point, alpha)?,
+        };
 
         // Step 3: U = sB -cY
         let mut s_b = EcPoint::new(&self.group.as_ref())?;

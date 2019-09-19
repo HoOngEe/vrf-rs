@@ -1047,6 +1047,120 @@ mod test {
         assert_eq!(beta, expected_beta);
     }
 
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "sample"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_prove_p256_sha256_swu_1() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+        // Secret Key (labelled as x)
+        let x = hex::decode("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721")
+            .unwrap();
+        // Data: ASCII "sample"
+        let alpha = hex::decode("73616d706c65").unwrap();
+
+        let pi = vrf.prove(&x, &alpha).unwrap();
+        let expected_pi = hex::decode("021d684d682e61dd76c794eef43988a2c61fbdb2af64fbb4f435cc2a842b0024c3b3056b7310e0130317274a58e57317c469b46fe5ab6a34463d7ecb2a7ae1d808381f53c0f6aaaebe62195cfd14526f03").unwrap();
+        assert_eq!(pi, expected_pi);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "sample"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_verify_p256_sha256_swu_1() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+        // Public Key (labelled as y)
+        let y = hex::decode("0360fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6")
+            .unwrap();
+        // VRF Proof
+        let pi = hex::decode("021d684d682e61dd76c794eef43988a2c61fbdb2af64fbb4f435cc2a842b0024c3b3056b7310e0130317274a58e57317c469b46fe5ab6a34463d7ecb2a7ae1d808381f53c0f6aaaebe62195cfd14526f03").unwrap();
+        // Data: ASCII "sample"
+        let alpha = hex::decode("73616d706c65").unwrap();
+
+        let beta = vrf.verify(&y, &pi, &alpha).unwrap();
+        let expected_beta =
+            hex::decode("143f36bf7175053315693cfcfdff5aebb13e5eb9c47f897f53f81561993cfcd2")
+                .unwrap();
+        assert_eq!(beta, expected_beta);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "test"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_prove_p256_sha256_swu_2() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+        // Secret Key (labelled as x)
+        let x = hex::decode("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721")
+            .unwrap();
+        // Data: ASCII "test"
+        let alpha = hex::decode("74657374").unwrap();
+
+        let pi = vrf.prove(&x, &alpha).unwrap();
+        let expected_pi = hex::decode("0376b758f457d2cabdfaeb18700e46e64f073eb98c119dee4db6c5bb1eaf67780654504c6e583fd6eb129195b1836f91a6dd16504f957c8dedb653806952e3b0217ef187b87b9dda851f0a515f4dcc09d1").unwrap();
+        assert_eq!(pi, expected_pi);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "test"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_verify_p256_sha256_swu_2() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+        // Public Key (labelled as y)
+        let y = hex::decode("0360fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6")
+            .unwrap();
+        // VRF Proof
+        let pi = hex::decode("0376b758f457d2cabdfaeb18700e46e64f073eb98c119dee4db6c5bb1eaf67780654504c6e583fd6eb129195b1836f91a6dd16504f957c8dedb653806952e3b0217ef187b87b9dda851f0a515f4dcc09d1").unwrap();
+        // Data: ASCII "test"
+        let alpha = hex::decode("74657374").unwrap();
+
+        let beta = vrf.verify(&y, &pi, &alpha).unwrap();
+        let expected_beta =
+            hex::decode("6b5bb622a6bc1387a7dcc4f46cfdcc3bce67669b32f3bc39e047c3b6cd3e65d9")
+                .unwrap();
+        assert_eq!(beta, expected_beta);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "Example of ECDSA with ansip256r1 and SHA-256"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_prove_p256_sha256_swu_3() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+        // Secret Key (labelled as x)
+        let x = hex::decode("2ca1411a41b17b24cc8c3b089cfd033f1920202a6c0de8abb97df1498d50d2c8")
+            .unwrap();
+        // Data: ASCII "Example of ECDSA with ansip256r1 and SHA-256"
+        let alpha = hex::decode("4578616d706c65206f66204543445341207769746820616e736970323536723120616e64205348412d323536").unwrap();
+
+        let pi = vrf.prove(&x, &alpha).unwrap();
+        let expected_pi = hex::decode("035e844533a7c5109ab3dffd04f2ef0d38d679101124f15243199ce92f0f29477ca8e8f01b40c77c61a169ad6db9d76fae7938e94a4338bca9c586c8e266ead7a6b24b769d3d34efc85f6cdb82d96bb717").unwrap();
+        assert_eq!(pi, expected_pi);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "Example of ECDSA with ansip256r1 and SHA-256"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_verify_p256_sha256_swu_3() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+        // Public Key (labelled as y)
+        let y = hex::decode("03596375e6ce57e0f20294fc46bdfcfd19a39f8161b58695b3ec5b3d16427c274d")
+            .unwrap();
+        // VRF Proof
+        let pi = hex::decode("035e844533a7c5109ab3dffd04f2ef0d38d679101124f15243199ce92f0f29477ca8e8f01b40c77c61a169ad6db9d76fae7938e94a4338bca9c586c8e266ead7a6b24b769d3d34efc85f6cdb82d96bb717").unwrap();
+        // Data: ASCII "Example of ECDSA with ansip256r1 and SHA-256"
+        let alpha = hex::decode("4578616d706c65206f66204543445341207769746820616e736970323536723120616e64205348412d323536").unwrap();
+
+        let beta = vrf.verify(&y, &pi, &alpha).unwrap();
+        let expected_beta =
+            hex::decode("be1dcb17e9815ac6acf819e7ad4b75e575eafad25915c2608959d780364fc912")
+                .unwrap();
+        assert_eq!(beta, expected_beta);
+    }
+
     /// Test vector for `P256-SHA256-TAI` cipher suite
     /// ASCII: "sample"
     /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.1)
@@ -1095,6 +1209,90 @@ mod test {
 
         let expected_hash =
             hex::decode("02141e41d4d55802b0e3adaba114c81137d95fd3869b6b385d4487b1130126648d")
+                .unwrap();
+        assert_eq!(hash_bytes, expected_hash);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "sample"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_hash_to_point_simplified_swu_1() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+
+        // Public key
+        let public_key_hex =
+            hex::decode("0360fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6")
+                .unwrap();
+        let public_key = EcPoint::from_bytes(&vrf.group, &public_key_hex, &mut vrf.bn_ctx).unwrap();
+
+        // Data to be hashed with Simplified SWU (ASCII "sample")
+        let data = hex::decode("73616d706c65").unwrap();
+        let hash = vrf
+            .hash_to_point_simplified_swu(&public_key, &data)
+            .unwrap();
+        let hash_bytes = hash
+            .to_bytes(&vrf.group, PointConversionForm::COMPRESSED, &mut vrf.bn_ctx)
+            .unwrap();
+
+        let expected_hash =
+            hex::decode("027827143876a58c2189402306c6ff6f7f9a7271067f3ed28eb63790d58a84fdd6")
+                .unwrap();
+        assert_eq!(hash_bytes, expected_hash);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "test"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_hash_to_point_simplified_swu_2() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+
+        // Public key
+        let public_key_hex =
+            hex::decode("0360fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6")
+                .unwrap();
+        let public_key = EcPoint::from_bytes(&vrf.group, &public_key_hex, &mut vrf.bn_ctx).unwrap();
+
+        // Data to be hashed with Simplfied SWU (ASCII "test")
+        let data = hex::decode("74657374").unwrap();
+        let hash = vrf
+            .hash_to_point_simplified_swu(&public_key, &data)
+            .unwrap();
+        let hash_bytes = hash
+            .to_bytes(&vrf.group, PointConversionForm::COMPRESSED, &mut vrf.bn_ctx)
+            .unwrap();
+
+        let expected_hash =
+            hex::decode("020e6c14efc8bc7150a3467aafa78be9856a2c6e405bdcc50f767fe638569d0172")
+                .unwrap();
+        assert_eq!(hash_bytes, expected_hash);
+    }
+
+    /// Test vector for `P256-SHA256-SWU` cipher suite
+    /// ASCII: "Example of ECDSA with ansip256r1 and SHA-256"
+    /// Source: [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05) (section A.2)
+    #[test]
+    fn test_hash_to_point_simplified_swu_3() {
+        let mut vrf = ECVRF::from_suite(CipherSuite::P256_SHA256_SWU).unwrap();
+
+        // Public key
+        let public_key_hex =
+            hex::decode("03596375e6ce57e0f20294fc46bdfcfd19a39f8161b58695b3ec5b3d16427c274d")
+                .unwrap();
+        let public_key = EcPoint::from_bytes(&vrf.group, &public_key_hex, &mut vrf.bn_ctx).unwrap();
+
+        // Data to be hashed with Simplfied SWU (ASCII "Example of ECDSA with ansip256r1 and SHA-256")
+        let data = hex::decode("4578616d706c65206f66204543445341207769746820616e736970323536723120616e64205348412d323536").unwrap();
+        let hash = vrf
+            .hash_to_point_simplified_swu(&public_key, &data)
+            .unwrap();
+        let hash_bytes = hash
+            .to_bytes(&vrf.group, PointConversionForm::COMPRESSED, &mut vrf.bn_ctx)
+            .unwrap();
+
+        let expected_hash =
+            hex::decode("02429690b91e1783cd0d7e393db07cc44b48c226cb837adb2282251cabf431a484")
                 .unwrap();
         assert_eq!(hash_bytes, expected_hash);
     }

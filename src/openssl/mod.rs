@@ -53,6 +53,8 @@ mod utils;
 pub enum CipherSuite {
     /// `NIST P-256` with `SHA256` and `ECVRF_hash_to_curve_try_and_increment`
     P256_SHA256_TAI,
+    /// `NIST P-256` with `SHA256` and `ECVRF_hash_to_curve_Simplified_SWU`
+    P256_SHA256_SWU,
     SECP256K1_SHA256_SVDW,
     /// `Secp256k1` with `SHA256` and `ECVRF_hash_to_curve_try_and_increment`
     SECP256K1_SHA256_TAI,
@@ -64,6 +66,7 @@ impl CipherSuite {
     fn suite_string(&self) -> u8 {
         match *self {
             CipherSuite::P256_SHA256_TAI => 0x01,
+            CipherSuite::P256_SHA256_SWU => 0x02,
             CipherSuite::SECP256K1_SHA256_SVDW => 0xFD,
             CipherSuite::SECP256K1_SHA256_TAI => 0xFE,
             CipherSuite::K163_SHA256_TAI => 0xFF,
@@ -115,6 +118,8 @@ pub struct ECVRF {
     hasher: MessageDigest,
     // The order of the curve
     order: BigNum,
+    a: BigNum,
+    b: BigNum,
     p: BigNum,
     // Length of the order of the curve in bits
     qlen: usize,
@@ -150,12 +155,13 @@ impl ECVRF {
 
         // Elliptic Curve parameters
         let (group, cofactor) = match suite {
-            CipherSuite::P256_SHA256_TAI => {
+            CipherSuite::P256_SHA256_TAI | CipherSuite::P256_SHA256_SWU => {
                 (EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?, 0x01)
             }
             CipherSuite::K163_SHA256_TAI => (EcGroup::from_curve_name(Nid::SECT163K1)?, 0x02),
-            CipherSuite::SECP256K1_SHA256_SVDW => (EcGroup::from_curve_name(Nid::SECP256K1)?, 0x01),
-            CipherSuite::SECP256K1_SHA256_TAI => (EcGroup::from_curve_name(Nid::SECP256K1)?, 0x01),
+            CipherSuite::SECP256K1_SHA256_TAI | CipherSuite::SECP256K1_SHA256_SVDW => {
+                (EcGroup::from_curve_name(Nid::SECP256K1)?, 0x01)
+            }
         };
 
         let mut order = BigNum::new()?;
@@ -176,6 +182,8 @@ impl ECVRF {
             group,
             bn_ctx,
             order,
+            a,
+            b,
             p,
             hasher,
             n,
@@ -332,9 +340,133 @@ impl ECVRF {
         point.ok_or(Error::HashToPointError)
     }
 
+    /// Function to convert a `Hash(PK|DATA)` to a point in the curve as stated in [VRF-draft-05](https://tools.ietf.org/pdf/draft-irtf-cfrg-vrf-05)
+    /// (section 5.4.1.3).
+    /// Only works with the P256 curve now. (Using hard-coded parameters)
+    ///
+    /// # Arguments
+    ///
+    /// * `public_key` - An `EcPoint` referencing the public key.
+    /// * `alpha` - A slice containing the input data.
+    ///
+    /// # Returns
+    ///
+    /// * If successful, an `EcPoint` representing the hashed point.
+    fn hash_to_point_simplified_swu(
+        &mut self,
+        public_key: &EcPoint,
+        alpha: &[u8],
+    ) -> Result<EcPoint, Error> {
+        // Constants
+        // p - 2. Used in inv0(), Pre-computed value
+        let pm2 = BigNum::from_hex_str(
+            "ffffffff00000001000000000000000000000000fffffffffffffffffffffffd",
+        )?;
+        // (p - 1) / 2. Used in is_square(), Pre-computed value
+        let pm1d2 = BigNum::from_hex_str(
+            "7fffffff800000008000000000000000000000007fffffffffffffffffffffff",
+        )?;
+        // -b / a. Pre-computed value
+        let mbda = BigNum::from_hex_str(
+            "73976747e368dbf83bf93f1c7cdd823ecc5f023b441be5a76944bebf629b756e",
+        )?;
+        let one = BigNum::from_u32(1)?;
+        let three = BigNum::from_u32(3)?;
+
+        // 1.   PK_string = EC2OSP(Y)
+        let pk_bytes = public_key.to_bytes(
+            &self.group,
+            PointConversionForm::COMPRESSED,
+            &mut self.bn_ctx,
+        )?;
+        // 2.   one_string = 0x01 = I2OSP(1, 1), a single octet with value 1
+        let cipher = [self.cipher_suite.suite_string(), 0x01];
+
+        // 3.   h_string = Hash(suite_string || one_string || PK_string ||
+        //         alpha_string)
+        let v = [&cipher[..], &pk_bytes[..], &alpha[..]].concat();
+        let hash = hash(self.hasher, &v).unwrap();
+
+        // 4.   t = string_to_int(h_string) mod p
+        let u = BigNum::from_slice(&hash)?;
+        let mut t = BigNum::new()?;
+        t.checked_rem(&u, &self.p, &mut self.bn_ctx)?;
+
+        // 5.   r = -(t^2) mod p
+        let mut mr = BigNum::new()?;
+        mr.mod_sqr(&t, &self.p, &mut self.bn_ctx)?;
+        let mut r = BigNum::new()?;
+        r.mod_sub(&self.p, &mr, &self.p, &mut self.bn_ctx)?;
+
+        // 6.   d = (r^2 + r) mod p
+        //      (d is t^4-t^2 mod p)
+        let mut r2 = BigNum::new()?;
+        r2.mod_sqr(&r, &self.p, &mut self.bn_ctx)?;
+        let mut d = BigNum::new()?;
+        d.mod_add(&r2, &r, &self.p, &mut self.bn_ctx)?;
+
+        // 7.   If d = 0 then d_inverse = 0; else d_inverse = 1/d mod p
+        //      => d_inverse = inv0(d)
+        let mut d_inverse = BigNum::new()?;
+        d_inverse.mod_exp(&d, &pm2, &self.p, &mut self.bn_ctx)?;
+
+        // 8.   x = ((-b/a) * (1 + d_inverse)) mod p
+        let mut tmp = BigNum::new()?;
+        tmp.mod_mul(&mbda, &d_inverse, &self.p, &mut self.bn_ctx)?;
+        let mut x = BigNum::new()?;
+        x.mod_add(&tmp, &mbda, &self.p, &mut self.bn_ctx)?;
+
+        // 9.   w = (x^3 + a*x + b) mod p
+        //      (this step evaluates the curve equation)
+        tmp.mod_mul(&x, &self.a, &self.p, &mut self.bn_ctx)?;
+        let mut tmp2 = BigNum::new()?;
+        tmp2.mod_exp(&x, &three, &self.p, &mut self.bn_ctx)?;
+        let mut tmp3 = BigNum::new()?;
+        tmp3.mod_add(&tmp2, &tmp, &self.p, &mut self.bn_ctx)?;
+        let mut w = BigNum::new()?;
+        w.mod_add(&self.b, &tmp3, &self.p, &mut self.bn_ctx)?;
+
+        // 10.  Let e equal the Legendre symbol of w and p
+        let mut e = BigNum::new()?;
+        e.mod_exp(&w, &pm1d2, &self.p, &mut self.bn_ctx)?;
+
+        // 11.  If e is equal to 0 or 1 then final_x = x; else final_x = r * x
+        //      mod p
+        let mut rx = BigNum::new()?;
+        rx.mod_mul(&r, &x, &self.p, &mut self.bn_ctx)?;
+
+        let cond = e.ucmp(&one) != Ordering::Greater;
+        let final_x = match cond {
+            true => x,
+            false => rx,
+        };
+
+        // 12.  H_prelim = arbitrary_string_to_point(int_to_string(final_x, 2n))
+        let mut v = vec![0x02];
+        let x_vec = final_x.to_vec();
+        v.extend(vec![0; 32 - x_vec.len()]);
+        v.extend(x_vec);
+        let mut point = EcPoint::from_bytes(&self.group, &v, &mut self.bn_ctx)?;
+
+        // 13.  If cofactor > 1, set H = cofactor * H; else set H = H_prelim
+        if self.cofactor != 1 {
+            let mut new_pt = EcPoint::new(&self.group.as_ref())?;
+            new_pt.mul(
+                &self.group.as_ref(),
+                &point,
+                &BigNum::from_slice(&[self.cofactor])?.as_ref(),
+                &self.bn_ctx,
+            )?;
+            point = new_pt;
+        }
+
+        // 14.  Output H
+        Ok(point)
+    }
+
     /// Function to convert a `Hash(PK|DATA)` to a point in the curve, in constant time.
     /// Stated in [hash-to-curve-04](https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-04#section-6.9.1)
-    ///
+    /// Only works with the SECP256K1 curve now. (Using hard-coded parameters)
     ///
     /// # Arguments
     ///
@@ -674,6 +806,9 @@ impl VRF<&[u8], &[u8]> for ECVRF {
 
         // Step 2: Hash to curve
         let h_point = match self.cipher_suite {
+            CipherSuite::P256_SHA256_SWU => {
+                self.hash_to_point_simplified_swu(&public_key_point, alpha)?
+            }
             CipherSuite::SECP256K1_SHA256_SVDW => {
                 self.hash_to_point_svdw(&public_key_point, alpha)?
             }
@@ -737,6 +872,9 @@ impl VRF<&[u8], &[u8]> for ECVRF {
         // Step 2: hash to curve
         let public_key_point = EcPoint::from_bytes(&self.group, &y, &mut self.bn_ctx)?;
         let h_point = match self.cipher_suite {
+            CipherSuite::P256_SHA256_SWU => {
+                self.hash_to_point_simplified_swu(&public_key_point, alpha)?
+            }
             CipherSuite::SECP256K1_SHA256_SVDW => {
                 self.hash_to_point_svdw(&public_key_point, alpha)?
             }

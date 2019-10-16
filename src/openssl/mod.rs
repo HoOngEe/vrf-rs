@@ -352,6 +352,7 @@ impl ECVRF {
     /// # Returns
     ///
     /// * If successful, an `EcPoint` representing the hashed point.
+    #[allow(clippy::many_single_char_names)]
     fn hash_to_point_simplified_swu(
         &mut self,
         public_key: &EcPoint,
@@ -476,6 +477,7 @@ impl ECVRF {
     /// # Returns
     ///
     /// * If successful, an `EcPoint` representing the hashed point.
+    #[allow(clippy::many_single_char_names)]
     fn hash_to_point_svdw(&mut self, public_key: &EcPoint, alpha: &[u8]) -> Result<EcPoint, Error> {
         let pk_bytes = public_key.to_bytes(
             &self.group,

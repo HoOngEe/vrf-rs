@@ -437,10 +437,7 @@ impl ECVRF {
         rx.mod_mul(&r, &x, &self.p, &mut self.bn_ctx)?;
 
         let cond = e.ucmp(&one) != Ordering::Greater;
-        let final_x = match cond {
-            true => x,
-            false => rx,
-        };
+        let final_x = if cond { x } else { rx };
 
         // 12.  H_prelim = arbitrary_string_to_point(int_to_string(final_x, 2n))
         let mut v = vec![0x02];
@@ -599,25 +596,13 @@ impl ECVRF {
         //  26. gx3 = gx3 + B           // gx3 = x3^3 + B
         gx3.mod_add(&gx3_2, &c_b, &self.p, &mut self.bn_ctx)?;
         //  27.   x = CMOV(x2, x1, e1)  // select x1 if gx1 is square
-        let mut x = match e1 {
-            true => x1,
-            false => x2,
-        };
+        let mut x = if e1 { x1 } else { x2 };
         //  28.  gx = CMOV(gx2, gx1, e1)
-        let mut gx = match e1 {
-            true => gx1,
-            false => gx2,
-        };
+        let mut gx = if e1 { gx1 } else { gx2 };
         //  29.   x = CMOV(x3, x, e3)   // select x3 if gx1 and gx2 are not square
-        x = match e3 {
-            true => x,
-            false => x3,
-        };
+        x = if e3 { x } else { x3 };
         //  30.  gx = CMOV(gx3, gx, e3)
-        gx = match e3 {
-            true => gx,
-            false => gx3,
-        };
+        gx = if e3 { gx } else { gx3 };
         //  31.   y = sqrt(gx)
         let mut y = BigNum::new()?;
         y.mod_exp(&gx, &pp1d4, &self.p, &mut self.bn_ctx)?;
@@ -626,10 +611,7 @@ impl ECVRF {
         //  33.   y = CMOV(-y, y, e4)   // select correct sign of y
         let mut my = BigNum::new()?;
         my.checked_sub(&self.p, &y)?;
-        y = match e4 {
-            true => y,
-            false => my,
-        };
+        y = if e4 { y } else { my };
         //  34. return (x, y)
         // Using uncompressed form
         let mut v = vec![0x04];
